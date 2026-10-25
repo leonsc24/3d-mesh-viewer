@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#18181b">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <title>3D Mesh Viewer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; background-color: #18181b; font-family: sans-serif; color: #fff; }
+        #canvas-container { width: 100%; height: 100%; display: block; }
+        #top-bar { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 10; display: flex; justify-content: space-between; align-items: center; pointer-events: none; }
+        .ui-btn { pointer-events: auto; background: rgba(24, 24, 27, 0.85); backdrop-filter: blur(8px); color: #fff; border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+        .ui-btn:active { background: #3b82f6; }
+        #file-input { display: none; }
+        #options-drawer { position: absolute; top: 52px; left: 12px; z-index: 10; width: 280px; max-width: calc(100vw - 24px); background: rgba(18, 18, 20, 0.92); backdrop-filter: blur(12px); border-radius: 10px; padding: 12px; display: none; flex-direction: column; gap: 8px; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 8px 24px rgba(0,0,0,0.6); max-height: calc(100vh - 120px); overflow-y: auto; }
+        .row-group { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+        .row-group label { font-size: 11px; font-weight: 600; color: #9ca3af; }
+        select.compact-input { background: #27272a; color: #fff; border: 1px solid #3f3f46; border-radius: 6px; padding: 6px 8px; font-size: 11px; flex: 1; }
+        #color-picker { border: none; width: 28px; height: 24px; border-radius: 4px; cursor: pointer; background: none; }
+        .btn-toggle { background: #27272a; border: 1px solid #3f3f46; color: #d4d4d8; padding: 6px; border-radius: 6px; font-size: 11px; font-weight: 600; flex: 1; cursor: pointer; text-align: center; }
+        .btn-toggle.active { background: #2563eb; color: #fff; border-color: #3b82f6; }
+        .view-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+        .view-btn { background: #27272a; border: 1px solid #3f3f46; color: #d4d4d8; font-size: 10px; padding: 6px; border-radius: 5px; cursor: pointer; text-align: center; }
+        .view-btn:active { background: #2563eb; color: #fff; }
+        #info-card { position: absolute; bottom: 12px; left: 12px; z-index: 10; background: rgba(18, 18, 20, 0.85); backdrop-filter: blur(8px); padding: 8px 12px; border-radius: 8px; font-size: 11px; border: 1px solid rgba(255,255,255,0.1); display: none; max-width: calc(100vw - 24px); }
+        #bbox-card { position: absolute; bottom: 60px; left: 12px; z-index: 10; background: rgba(6, 78, 59, 0.85); backdrop-filter: blur(8px); padding: 8px 12px; border-radius: 8px; font-size: 11px; border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; display: none; }
+        #loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; flex-direction: column; z-index: 30; text-align: center; }
+        .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top: 3px solid #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+    <div id="top-bar">
+        <label class="ui-btn" for="file-input">📁 Open File / ZIP</label>
+        <input type="file" id="file-input" accept=".obj,.stl,.zip">
+        <button class="ui-btn" id="menu-toggle-btn">⚙️ Menu</button>
+    </div>
+    <div id="options-drawer">
+        <div class="row-group">
+            <label>MATERIAL</label>
+            <select id="material-select" class="compact-input">
+                <option value="shimmer">Signature Shimmer</option>
+                <option value="chrome">Chrome / Metal</option>
+                <option value="glass">Glass / Transparent</option>
+                <option value="ghost">X-Ray / Ghost</option>
+                <option value="wireframe">Wireframe</option>
+            </select>
+        </div>
+        <div class="row-group">
+            <label>SHIMMER TINT</label>
+            <input type="color" id="color-picker" value="#385290">
+        </div>
+        <div class="row-group">
+            <button class="btn-toggle active" id="grid-toggle-btn">Floor Grid: On</button>
+            <button class="btn-toggle" id="bbox-toggle-btn">Box Cage: Off</button>
+        </div>
+        <div class="row-group" id="unit-selector-row" style="display:none;">
+            <label>UNIT</label>
+            <select id="unit-select" class="compact-input">
+                <option value="mm">Millimeters (mm)</option>
+                <option value="cm">Centimeters (cm)</option>
+                <option value="in">Inches (in)</option>
+            </select>
+        </div>
+        <div style="font-size: 10px; font-weight: bold; color: #6b7280; margin-top: 4px;">QUICK CAMERA VIEWS</div>
+        <div class="view-grid">
+            <button class="view-btn" id="view-front">Front</button>
+            <button class="view-btn" id="view-back">Back</button>
+            <button class="view-btn" id="view-left">Left</button>
+            <button class="view-btn" id="view-right">Right</button>
+            <button class="view-btn" id="view-top">Top</button>
+            <button class="view-btn" id="view-bottom">Bottom</button>
+        </div>
+        <button class="ui-btn" id="autocenter-btn" style="background:#2563eb; text-align:center; margin-top:4px;">🎯 Auto-Center & Fit</button>
+    </div>
+    <div id="bbox-card"><div id="dim-x"><b>W:</b> -</div><div id="dim-y"><b>H:</b> -</div><div id="dim-z"><b>D:</b> -</div></div>
+    <div id="info-card"><div id="info-name"><b>File:</b> -</div><div id="info-stats"><b>Polys:</b> 0 | <b>Verts:</b> 0</div></div>
+    <div id="loading-overlay"><div class="spinner"></div><div id="loading-text" style="font-size:13px; color:#e4e4e7;">Parsing Geometry...</div></div>
+    <div id="canvas-container"></div>
+    <script>
+        const container = document.getElementById("canvas-container");
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x18181b);
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 0, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+        const gridHelper = new THREE.GridHelper(200, 50, 0x334455, 0x222233);
+        scene.add(gridHelper);
+        const apkShaderMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                u_LightPos: { value: new THREE.Vector3(1.0, 2.0, 3.0) },
+                u_ambientColor: { value: new THREE.Vector4(0.12, 0.18, 0.32, 1.0) },
+                u_diffuseColor: { value: new THREE.Vector4(0.22, 0.32, 0.58, 1.0) },
+                u_specularColor: { value: new THREE.Vector4(0.7, 0.85, 1.0, 1.0) }
+            },
+            vertexShader: "varying vec3 v_Normal; varying vec3 v_Position; void main() { v_Normal = normalize(normalMatrix * normal); vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); v_Position = mvPosition.xyz; gl_Position = projectionMatrix * mvPosition; }",
+            fragmentShader: "precision mediump float; uniform vec3 u_LightPos; uniform vec4 u_ambientColor; uniform vec4 u_diffuseColor; uniform vec4 u_specularColor; const float specular_exp = 16.0; varying vec3 v_Normal; varying vec3 v_Position; void main() { vec3 lightPosNorm = normalize(u_LightPos); vec3 cameraDir = normalize(-v_Position); vec3 halfDir = normalize(lightPosNorm + cameraDir); float specular = pow(max(dot(halfDir, v_Normal), 0.0), specular_exp); float diffuse = max(dot(lightPosNorm, v_Normal), 0.0); gl_FragColor = u_ambientColor * (1.0 - diffuse) + u_diffuseColor * (diffuse - specular) + u_specularColor * specular; }"
+        });
+        const materials = {
+            shimmer: apkShaderMaterial,
+            chrome: new THREE.MeshStandardMaterial({ color: 0xd0d8e8, roughness: 0.1, metalness: 0.95 }),
+            glass: new THREE.MeshPhysicalMaterial({ color: 0x90c0ff, roughness: 0.1, metalness: 0.1, transmission: 0.6, transparent: true, opacity: 0.85, ior: 1.5 }),
+            ghost: new THREE.MeshStandardMaterial({ color: 0x5080ff, roughness: 0.5, metalness: 0.2, transparent: true, opacity: 0.35, depthWrite: false }),
+            wireframe: new THREE.MeshBasicMaterial({ color: 0x60a5fa, wireframe: true })
+        };
+        let currentMaterial = materials.shimmer, isGridActive = true, isBBoxActive = false, bboxHelper = null;
+        let rawDimensions = { x: 0, y: 0, z: 0 }, currentMesh = null, savedObjectGroup = null, objectMaxDim = 100, objectCenterY = 0;
+        
+        document.getElementById("menu-toggle-btn").addEventListener("click", () => {
+            const drawer = document.getElementById("options-drawer");
+            drawer.style.display = drawer.style.display === "flex" ? "none" : "flex";
+        });
+        document.getElementById("grid-toggle-btn").addEventListener("click", (e) => {
+            isGridActive = !isGridActive;
+            gridHelper.visible = isGridActive;
+            e.target.classList.toggle("active", isGridActive);
+            e.target.innerText = "Floor Grid: " + (isGridActive ? "On" : "Off");
+        });
+        document.getElementById("bbox-toggle-btn").addEventListener("click", (e) => {
+            isBBoxActive = !isBBoxActive;
+            e.target.classList.toggle("active", isBBoxActive);
+            e.target.innerText = "Box Cage: " + (isBBoxActive ? "On" : "Off");
+            document.getElementById("unit-selector-row").style.display = isBBoxActive ? "flex" : "none";
+            document.getElementById("bbox-card").style.display = (isBBoxActive && savedObjectGroup) ? "block" : "none";
+            if (bboxHelper) bboxHelper.visible = isBBoxActive;
+            updateDims();
+        });
+        document.getElementById("unit-select").addEventListener("change", updateDims);
+        function updateDims() {
+            if (!isBBoxActive || !savedObjectGroup) return;
+            const unit = document.getElementById("unit-select").value;
+            let scale = 1.0, label = "mm";
+            if (unit === "cm") { scale = 0.1; label = "cm"; } else if (unit === "in") { scale = 1.0 / 25.4; label = "in"; }
+            document.getElementById("dim-x").innerHTML = "<b>W (X):</b> " + (rawDimensions.x * scale).toFixed(2) + " " + label;
+            document.getElementById("dim-y").innerHTML = "<b>H (Y):</b> " + (rawDimensions.y * scale).toFixed(2) + " " + label;
+            document.getElementById("dim-z").innerHTML = "<b>D (Z):</b> " + (rawDimensions.z * scale).toFixed(2) + " " + label;
+        }
+        document.getElementById("color-picker").addEventListener("input", (e) => {
+            const c = new THREE.Color(e.target.value);
+            apkShaderMaterial.uniforms.u_diffuseColor.value.set(c.r, c.g, c.b, 1.0);
+            apkShaderMaterial.uniforms.u_ambientColor.value.set(c.r * 0.5, c.g * 0.5, c.b * 0.5, 1.0);
+            if (currentMaterial.color && currentMaterial !== apkShaderMaterial) currentMaterial.color.set(e.target.value);
+        });
+        document.getElementById("material-select").addEventListener("change", (e) => {
+            currentMaterial = materials[e.target.value];
+            if (currentMesh) currentMesh.traverse(ch => { if (ch.isMesh) ch.material = currentMaterial; });
+        });
+        ["front", "back", "left", "right", "top", "bottom"].forEach(side => {
+            document.getElementById("view-" + side).addEventListener("click", () => {
+                if (!savedObjectGroup) return;
+                const dist = objectMaxDim * 1.8;
+                controls.target.set(0, objectCenterY, 0);
+                if (side === "front") camera.position.set(0, objectCenterY, dist);
+                if (side === "back") camera.position.set(0, objectCenterY, -dist);
+                if (side === "left") camera.position.set(-dist, objectCenterY, 0);
+                if (side === "right") camera.position.set(dist, objectCenterY, 0);
+                if (side === "top") camera.position.set(0, objectCenterY + dist, 0.001);
+                if (side === "bottom") camera.position.set(0, objectCenterY - dist, 0.001);
+                controls.update();
+            });
+        });
+        document.getElementById("autocenter-btn").addEventListener("click", () => { if (savedObjectGroup) fitCam(savedObjectGroup); });
+        
+        document.getElementById("file-input").addEventListener("change", function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            document.getElementById("loading-overlay").style.display = "flex";
+            document.getElementById("options-drawer").style.display = "none";
+            const ext = file.name.split(".").pop().toLowerCase();
+            e.target.value = "";
+            const reader = new FileReader();
+            if (ext === "zip") {
+                document.getElementById("loading-text").innerText = "Extracting ZIP Archive...";
+                reader.onload = async function(ev) {
+                    try {
+                        const zip = new JSZip();
+                        const zipContent = await zip.loadAsync(ev.target.result);
+                        const masterGroup = new THREE.Group();
+                        let totalVerts = 0, count = 0;
+                        const entries = Object.keys(zipContent.files).filter(fn => {
+                            const l = fn.toLowerCase();
+                            return (l.endsWith(".stl") || l.endsWith(".obj")) && !fn.includes("__MACOSX");
+                        });
+                        if (entries.length === 0) throw new Error("No STL/OBJ found in ZIP.");
+                        for (const path of entries) {
+                            const entry = zipContent.files[path];
+                            const subExt = path.split(".").pop().toLowerCase();
+                            document.getElementById("loading-text").innerText = `Loading (${++count}/${entries.length}):\\n` + path.split("/").pop();
+                            if (subExt === "stl") {
+                                const buf = await entry.async("ArrayBuffer");
+                                const geom = new THREE.STLLoader().parse(buf);
+                                geom.computeVertexNormals();
+                                masterGroup.add(new THREE.Mesh(geom, currentMaterial));
+                                totalVerts += geom.attributes.position.count;
+                            } else if (subExt === "obj") {
+                                const txt = await entry.async("Text");
+                                const obj = new THREE.OBJLoader().parse(txt);
+                                obj.traverse(ch => { if (ch.isMesh) { ch.material = currentMaterial; if (ch.geometry) { ch.geometry.computeVertexNormals(); totalVerts += ch.geometry.attributes.position.count; } } });
+                                masterGroup.add(obj);
+                            }
+                        }
+                        setupScene(masterGroup, file.name, totalVerts);
+                    } catch (err) { alert("ZIP Error: " + err.message); } finally { document.getElementById("loading-overlay").style.display = "none"; }
+                };
+                reader.readAsArrayBuffer(file);
+            } else if (ext === "stl") {
+                document.getElementById("loading-text").innerText = "Parsing STL Geometry...";
+                reader.onload = function(ev) {
+                    try {
+                        const geom = new THREE.STLLoader().parse(ev.target.result);
+                        geom.computeVertexNormals();
+                        const group = new THREE.Group();
+                        group.add(new THREE.Mesh(geom, currentMaterial));
+                        setupScene(group, file.name, geom.attributes.position.count);
+                    } catch (err) { alert("STL Error: " + err.message); } finally { document.getElementById("loading-overlay").style.display = "none"; }
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                document.getElementById("loading-text").innerText = "Parsing OBJ Geometry...";
+                reader.onload = function(ev) {
+                    try {
+                        const obj = new THREE.OBJLoader().parse(ev.target.result);
+                        let totalVerts = 0;
+                        obj.traverse(ch => { if (ch.isMesh) { ch.material = currentMaterial; if (ch.geometry) { ch.geometry.computeVertexNormals(); totalVerts += ch.geometry.attributes.position.count; } } });
+                        setupScene(obj, file.name, totalVerts);
+                    } catch (err) { alert("OBJ Error: " + err.message); } finally { document.getElementById("loading-overlay").style.display = "none"; }
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        function clearMesh() {
+            if (bboxHelper) { scene.remove(bboxHelper); if (bboxHelper.geometry) bboxHelper.geometry.dispose(); if (bboxHelper.material) bboxHelper.material.dispose(); bboxHelper = null; }
+            if (currentMesh) {
+                scene.remove(currentMesh);
+                currentMesh.traverse(ch => { if (ch.isMesh && ch.geometry) ch.geometry.dispose(); });
+                currentMesh = null; savedObjectGroup = null;
+            }
+        }
+        function fitCam(obj) {
+            const box = new THREE.Box3().setFromObject(obj);
+            const size = box.getSize(new THREE.Vector3());
+            objectMaxDim = Math.max(size.x, size.y, size.z);
+            objectCenterY = size.y * 0.5;
+            const z = Math.abs(objectMaxDim / 2 / Math.tan((camera.fov * Math.PI / 180) / 2)) * 1.8;
+            camera.position.set(0, objectCenterY, z);
+            camera.lookAt(0, objectCenterY, 0);
+            controls.target.set(0, objectCenterY, 0);
+            controls.update();
+        }
+        function setupScene(obj, filename, vertCount) {
+            clearMesh();
+            obj.rotation.x = -Math.PI / 2;
+            const box = new THREE.Box3().setFromObject(obj);
+            const center = box.getCenter(new THREE.Vector3());
+            obj.position.x -= center.x;
+            obj.position.z -= center.z;
+            obj.position.y -= box.min.y;
+            scene.add(obj);
+            currentMesh = obj;
+            savedObjectGroup = obj;
+            const finalBox = new THREE.Box3().setFromObject(obj);
+            const size = finalBox.getSize(new THREE.Vector3());
+            rawDimensions = { x: size.x, y: size.y, z: size.z };
+            bboxHelper = new THREE.BoxHelper(obj, 0x34d399);
+            bboxHelper.visible = isBBoxActive;
+            scene.add(bboxHelper);
+            fitCam(obj);
+            document.getElementById("info-name").innerHTML = "<b>File:</b> " + filename;
+            document.getElementById("info-stats").innerHTML = "<b>Polys:</b> " + Math.floor(vertCount / 3).toLocaleString() + " | <b>Verts:</b> " + vertCount.toLocaleString();
+            document.getElementById("info-card").style.display = "block";
+            if (isBBoxActive) { document.getElementById("bbox-card").style.display = "block"; updateDims(); }
+        }
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Telegram Mini App setup (also remains usable in a regular browser).
+        if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "3D Mesh Viewer",
+  "short_name": "Mesh Viewer",
+  "description": "View STL and OBJ 3D models, including files inside ZIP archives.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#18181b",
+  "theme_color": "#18181b"
+}
